@@ -10,6 +10,8 @@ from collections import defaultdict
 options = defaultdict(lambda: None)
 session = None
 
+ETL_VERSION = '0.2'
+
 def register_options(**kwargs):
     global options
     for k, v in kwargs.items():
@@ -72,7 +74,7 @@ def join_billing_data(billing_events_df):
     churned = customers.join(
         terminations, customers.customerID == terminations.Churn, how="leftouter"
     ).select(
-        "customerID", F.when(F.col("Churn").isNull(), "No").otherwise("Yes").alias("Churn")
+        "customerID", F.when(F.col("Churn").isNull(), F.lit(False)).otherwise(F.lit(True)).alias("Churn")
     )
 
     customer_charges = customers.join(
@@ -157,7 +159,7 @@ def resolve_dependent_column(
     null_parent_val="No internet service",
 ):
     return (
-        F.when(df[parent_col] == "No", null_parent_val)
+        F.when((df[parent_col] == "No") | (df[parent_col].isNull()), null_parent_val)
         .otherwise(F.when(df[col].isNull(), null_val).otherwise(df[col]))
         .alias(col)
     )
@@ -254,8 +256,8 @@ def process_account_meta(account_meta_df):
 
     customer_account_meta = account_meta_df.select(
         "customerID",
-        F.when(F.col("now") >= F.add_months(F.col("dateOfBirth"), 65 * 12), "Yes")
-        .otherwise("No")
+        F.when(F.col("now") >= F.add_months(F.col("dateOfBirth"), 65 * 12), F.lit(True))
+        .otherwise(F.lit(False))
         .alias("SeniorCitizen"),
         "Partner",
         "Dependents",
