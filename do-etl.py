@@ -34,6 +34,8 @@ parser.add_argument('--report-file', help='location in which to store an output 
 if __name__ == '__main__':
     import pyspark
     import os
+
+    failed = False
     
     args = parser.parse_args()
 
@@ -85,41 +87,9 @@ if __name__ == '__main__':
     from churn.etl import process_account_meta
     customer_account_meta = process_account_meta(account_meta)
 
-    from churn.etl import chained_join
+    from churn.etl import join_wide_table
 
-    wide_data = chained_join(
-        "customerID",
-        customers,
-        [
-            customer_billing,
-            customer_phone_features,
-            customer_internet_features,
-            customer_account_features,
-            customer_account_meta
-        ]
-    ).select(
-        "customerID", 
-        "gender", 
-        "SeniorCitizen", 
-        "Partner", 
-        "Dependents", 
-        "tenure", 
-        "PhoneService", 
-        "MultipleLines", 
-        "InternetService", 
-        "OnlineSecurity", 
-        "OnlineBackup", 
-        "DeviceProtection", 
-        "TechSupport", 
-        "StreamingTV", 
-        "StreamingMovies", 
-        "Contract", 
-        "PaperlessBilling", 
-        "PaymentMethod", 
-        "MonthlyCharges", 
-        "TotalCharges", 
-        "Churn"
-    )
+    wide_data = join_wide_table(customer_billing, customer_phone_features, customer_internet_features, customer_account_features, customer_account_meta)
 
     from churn.etl import write_df
     import timeit
@@ -132,10 +102,18 @@ if __name__ == '__main__':
 
     print("completed ETL pipeline (version %s) in %f seconds" % (churn.etl.ETL_VERSION, elapsed_time))
 
-    records = session.read.parquet(output_prefix + output_file + "." + output_kind).count()
+    records = session.read.parquet(output_prefix + output_file + "." + output_kind)
+    record_count = records.count()
+    record_nonnull_count = records.dropna().count()
 
-    first_line = 'Generated %d records in %f seconds; configuration follows:\n\n' % (records, elapsed_time)
+    first_line = 'Generated %d records in %f seconds; configuration follows:\n\n' % (record_count, elapsed_time)
     print(first_line)
+
+    if record_nonnull_count != record_count:
+        nulls = record_count - record_nonnull_count
+        null_percent = (float(nulls) / record_count) * 100
+        print('ERROR: analytics job generated %d records with nulls (%.02f%% of total)' % (nulls, null_percent))
+        failed = True
 
     with open(args.report_file, "w") as report:
         report.write(first_line + "\n")
@@ -144,3 +122,7 @@ if __name__ == '__main__':
             print(conf)
 
     session.stop()
+
+    if failed:
+        sys.exit(1)
+        print("Job failed (most likely due to nulls in output); check logs for lines beginning with ERROR")

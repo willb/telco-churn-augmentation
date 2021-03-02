@@ -10,6 +10,9 @@ options = defaultdict(lambda: None)
 
 now = datetime.datetime.now(datetime.timezone.utc)
 
+AUGMENT_VERSION = "0.4"
+AUGMENT_CUSTOMER_TAG = "0004"
+
 session = None
 currencyType = None
 
@@ -51,16 +54,16 @@ def _get_uniques(ct):
             from base64 import b64encode
 
             while True:
-                yield "%s" % b64encode(r.getrandbits(72).to_bytes(9, "big"), b"@_").decode(
+                yield "%s-%s" % (b64encode(r.getrandbits(72).to_bytes(9, "big"), b"@_").decode(
                     "utf-8"
-                )
+                ), AUGMENT_CUSTOMER_TAG)
         
         sp = str_part()
         
         uniques = (
             session.createDataFrame(
                 schema=StructType([StructField("u_value", StringType())]),
-                data=[dict(u_value=next(sp)) for _ in range(ct * 2)],
+                data=[dict(u_value=next(sp)) for _ in range(min(int(ct * 1.02), ct + 2))],
             )
             .distinct()
             .orderBy("u_value")
@@ -68,12 +71,8 @@ def _get_uniques(ct):
         ).cache()
 
         uc = uniques.count()
-        if uc != ct:
-            print(
-                "warning:  got some rng collision and have %d instead of %d duplicates"
-                % (uc, ct)
-            )
-        
+        assert (uc == ct), "due to prng collision we had %d instead of %d replicas" % (uc, ct)
+
         uniques.createOrReplaceTempView("uniques_%d" % ct)
 
         return uniques
