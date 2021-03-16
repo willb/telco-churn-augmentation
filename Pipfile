@@ -6,8 +6,10 @@ verify_ssl = true
 [dev-packages]
 
 [packages]
-pyspark = "~= 3.0"
+pyspark = "== 3.0.1"
+pymc3 = "*"
+arviz = "*"
 scipy = "*"
 numpy = "*"
 jupyter = "*"
-altair = "4.1.0"
+altair = "~= 4.1.0"

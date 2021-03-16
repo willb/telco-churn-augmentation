@@ -10,7 +10,7 @@ from collections import defaultdict
 options = defaultdict(lambda: None)
 session = None
 
-ETL_VERSION = '0.4'
+ETL_VERSION = '0.5'
 
 def register_options(**kwargs):
     global options
@@ -46,7 +46,8 @@ def read_df(session, fn):
 
 def find_customers(billing_events_df):
     customers = billing_events_df.select("customerID").distinct()
-    customers.cache()
+    if 'cache_customers' in options:
+        customers.cache()
     customers.createOrReplaceTempView("customers")
     return customers
 
