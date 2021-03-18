@@ -10,8 +10,8 @@ options = defaultdict(lambda: None)
 
 now = datetime.datetime.now(datetime.timezone.utc)
 
-AUGMENT_VERSION = "0.6"
-AUGMENT_CUSTOMER_TAG = "0006"
+AUGMENT_VERSION = "0.7"
+AUGMENT_CUSTOMER_TAG = "0007"
 
 session = None
 currencyType = None

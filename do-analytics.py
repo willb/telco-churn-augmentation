@@ -2,6 +2,7 @@
 # coding: utf-8
 
 import argparse
+from churn.etl import cast_wide_data
 import os
 import sys
 import re
@@ -32,8 +33,8 @@ parser.add_argument('--input-kind', help='Spark data source type for the input (
 parser.add_argument('--summary-prefix', help='text to prepend to analytic reports (e.g., "reports/"; default is empty)', default='')
 parser.add_argument('--report-file', help='location in which to store a performance report', default='report.txt')
 parser.add_argument('--log-level', help='set log level (default: OFF)', default="OFF")
-
-
+parser.add_argument('--coalesce-output', help='coalesce output to NUM partitions', default=0)
+parser.add_argument('--use-calendar-arithmetic', help='use add_months() function (default: False)', type=bool, default=False)
 
 
 if __name__ == '__main__':
@@ -64,7 +65,9 @@ if __name__ == '__main__':
         output_mode = args.output_mode,
         output_kind = args.output_kind,
         input_kind = args.input_kind,
-        output_file = args.output_file
+        output_file = args.output_file,
+        coalesce_output = args.coalesce_output,
+        use_calendar_arithmetic = args.use_calendar_arithmetic
     )
 
     from churn.etl import read_df
@@ -102,15 +105,19 @@ if __name__ == '__main__':
     from churn.etl import write_df
     import timeit
     
+    temp_output_file = "intermediate-" + churn.etl.options['output_file']
     output_file = churn.etl.options['output_file']
     output_kind = churn.etl.options['output_kind']
     output_prefix = churn.etl.options['output_prefix']
 
-    federation_time = timeit.timeit(lambda: write_df(wide_data, output_file), number=1)
+    federation_time = timeit.timeit(lambda: write_df(wide_data, temp_output_file), number=1)
 
-    records = session.read.parquet(output_prefix + output_file + "." + output_kind)
+    records = session.read.parquet(output_prefix + temp_output_file + "." + output_kind)
     record_count = records.count()
     record_nonnull_count = records.dropna().count()
+
+    # prepare data for training by casting decimals to floats and coalescing
+    write_df(cast_and_coalesce_wide_data(records), output_file)
 
     analysis_time = timeit.timeit(lambda: churn.eda.output_reports(records, billing_events, args.summary_prefix), number=1)
 

@@ -1,6 +1,8 @@
 from pyspark.sql import types as T
 from pyspark.sql import functions as F
 
+eda_options = { 'use_array_ops' : False }
+
 def isnumeric(data_type):
     numeric_types = [T.ByteType, T.ShortType, T.IntegerType, T.LongType, T.FloatType, T.DoubleType, T.DecimalType]
     return any([isinstance(data_type, t) for t in numeric_types])
@@ -11,14 +13,14 @@ def percent_true(df, cols):
     return {col : df.where(F.col(col) == True).count() / denominator for col in cols}
 
 
-def approx_cardinalities(df, cols):
+def cardinalities(df, cols):
     from functools import reduce
     
     counts = df.groupBy(
         F.lit(True).alias("drop_me")
     ).agg(
         F.count('*').alias("total"),
-        *[F.approx_count_distinct(F.col(c)).alias(c) for c in cols]
+        *[F.countDistinct(F.col(c)).alias(c) for c in cols]
     ).drop("drop_me").cache()
     
     result = reduce(lambda l, r: l.unionAll(r), [counts.select(F.lit(c).alias("field"), F.col(c).alias("approx_count")) for c in counts.columns]).collect()
@@ -37,8 +39,14 @@ def likely_categoricals(counts):
     return [k for (k, v) in counts.items() if v < total * 0.15 or v < 128]
 
 def unique_values(df, cols):
+    if eda_options['use_array_ops']:
+        return unique_values_array(df, cols)
+    else:   
+        return unique_values_driver(df, cols)
+
+def unique_values_array(df, cols):
     from functools import reduce
-    
+ 
     counts = df.groupBy(
         F.lit(True).alias("drop_me")
     ).agg(
@@ -51,6 +59,22 @@ def unique_values(df, cols):
     return dict([(r[0],r[1]) for r in result])
 
 
+def unique_values_driver(df, cols):
+    from functools import reduce
+    from itertools import groupby
+    
+    results = reduce(
+        lambda l, r: l.unionAll(r),
+        [
+            df.select(
+                F.lit(col).alias("field"), 
+                F.col(col).alias("value")
+            ).distinct() for col in cols
+        ]
+    ).orderBy("field", "value").collect()
+
+    return dict([(k, [g[1] for g in gs]) for (k, gs) in groupby([(t[0], t[1]) for t in results], lambda t: t[0])])
+
 def approx_ecdf(df, cols):
     from functools import reduce
     
@@ -62,7 +86,7 @@ def approx_ecdf(df, cols):
     return {c: dict(zip(quantiles, vs)) for (c, vs) in result.items()}
 
 
-def gen_summary(df):
+def gen_summary(df, output_prefix=""):
     summary = {}
     
     string_cols = []
@@ -80,16 +104,16 @@ def gen_summary(df):
         else:
             other_cols.append(field.name)
     
-    cardinalities = approx_cardinalities(df, string_cols)
-    uniques = likely_unique(cardinalities)
-    categoricals = unique_values(df, likely_categoricals(cardinalities))
+    counts = cardinalities(df, string_cols)
+    uniques = likely_unique(counts)
+    categoricals = unique_values(df, likely_categoricals(counts))
 
-    aggregates = {}
     for span in [2,3,4,6,12]:
-        # we currently don't do anything interesting with these
-        df.cube("Churn", F.ceil(df.tenure / span).alias("quarters"), "gender", "Partner", "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10)).count().count()
-        aggregates["churnValues-%d-span" % span] = df.rollup("Churn", F.ceil(df.tenure / span).alias("quarters"), "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10)).agg({"TotalCharges" : "sum"}).toPandas().to_json()
-    
+        thecube = df.cube("Churn", F.ceil(df.tenure / span).alias("%d_month_spans" % span), "gender", "Partner", "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10)).count()
+        therollup = df.rollup("Churn", F.ceil(df.tenure / span).alias("%d_month_spans" % span), "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10)).agg({"TotalCharges" : "sum"})
+        thecube.write.parquet("%scube-%d.parquet" % (output_prefix, span))
+        therollup.write.parquet("%srollup-%d.parquet" % (output_prefix, span))
+
     encoding_struct = {
         "categorical" : categoricals,
         "numeric" : numeric_cols + boolean_cols,
