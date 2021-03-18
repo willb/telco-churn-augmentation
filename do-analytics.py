@@ -118,6 +118,7 @@ if __name__ == '__main__':
     record_nonnull_count = records.dropna().count()
 
     write_df(records, output_file)
+    records = session.read.parquet(output_prefix + output_file + "." + output_kind)
 
     analysis_time = timeit.timeit(lambda: churn.eda.output_reports(records, billing_events, args.summary_prefix), number=1)
 
