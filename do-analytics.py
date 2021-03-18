@@ -113,7 +113,7 @@ if __name__ == '__main__':
     federation_time = timeit.timeit(lambda: write_df(wide_data, temp_output_file), number=1)
 
     # prepare data for training by casting decimals to floats and coalescing
-    coalesce_time = timeit.timeit(lambda: write_df(cast_and_coalesce_wide_data(session.read.parquet(output_prefix + temp_output_file + "." + output_kind)), output_file))
+    coalesce_time = timeit.timeit(lambda: write_df(cast_and_coalesce_wide_data(session.read.parquet(output_prefix + temp_output_file + "." + output_kind)), output_file), number=1)
     records = session.read.parquet(output_prefix + output_file + "." + output_kind)
     record_count = records.count()
     record_nonnull_count = records.dropna().count()
