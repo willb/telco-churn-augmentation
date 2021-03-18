@@ -21,10 +21,9 @@ def cardinalities(df, cols):
     ).agg(
         F.count('*').alias("total"),
         *[F.countDistinct(F.col(c)).alias(c) for c in cols]
-    ).drop("drop_me").cache()
+    ).drop("drop_me")
     
     result = reduce(lambda l, r: l.unionAll(r), [counts.select(F.lit(c).alias("field"), F.col(c).alias("approx_count")) for c in counts.columns]).collect()
-    counts.unpersist()
     
     return dict([(r[0],r[1]) for r in result])
 
@@ -51,10 +50,9 @@ def unique_values_array(df, cols):
         F.lit(True).alias("drop_me")
     ).agg(
         *[F.array_sort(F.collect_set(F.col(c))).alias(c) for c in cols]
-    ).drop("drop_me").cache()
+    ).drop("drop_me")
     
     result = reduce(lambda l, r: l.unionAll(r), [counts.select(F.lit(c).alias("field"), F.col(c).alias("unique_vals")) for c in counts.columns]).collect()
-    counts.unpersist()
     
     return dict([(r[0],r[1]) for r in result])
 
