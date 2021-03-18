@@ -16,16 +16,11 @@ def percent_true(df, cols):
 def cardinalities(df, cols):
     from functools import reduce
     
-    counts = df.groupBy(
+    return df.groupBy(
         F.lit(True).alias("drop_me")
     ).agg(
-        F.count('*').alias("total"),
-        *[F.countDistinct(F.col(c)).alias(c) for c in cols]
-    ).drop("drop_me")
-    
-    result = reduce(lambda l, r: l.unionAll(r), [counts.select(F.lit(c).alias("field"), F.col(c).alias("approx_count")) for c in counts.columns]).collect()
-    
-    return dict([(r[0],r[1]) for r in result])
+        F.struct(*[F.countDistinct(F.col(c)).alias(c) for c in cols]).alias("results")
+    ).drop("drop_me").select("results").collect()[0][0].asDict()
 
 
 def likely_unique(counts):
@@ -50,7 +45,7 @@ def unique_values_array(df, cols):
         F.lit(True).alias("drop_me")
     ).agg(
         *[F.array_sort(F.collect_set(F.col(c))).alias(c) for c in cols]
-    ).drop("drop_me")
+    ).drop("drop_me").cache()
     
     result = reduce(lambda l, r: l.unionAll(r), [counts.select(F.lit(c).alias("field"), F.col(c).alias("unique_vals")) for c in counts.columns]).collect()
     
@@ -58,20 +53,7 @@ def unique_values_array(df, cols):
 
 
 def unique_values_driver(df, cols):
-    from functools import reduce
-    from itertools import groupby
-    
-    results = reduce(
-        lambda l, r: l.unionAll(r),
-        [
-            df.select(
-                F.lit(col).alias("field"), 
-                F.col(col).alias("value")
-            ).distinct() for col in cols
-        ]
-    ).orderBy("field", "value").collect()
-
-    return dict([(k, [g[1] for g in gs]) for (k, gs) in groupby([(t[0], t[1]) for t in results], lambda t: t[0])])
+    return { col : [v[0] for v in df.select(F.col(col).alias(value)).distinct().orderBy(F.col(value)).collect()] for col in cols}
 
 def approx_ecdf(df, cols):
     from functools import reduce
