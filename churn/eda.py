@@ -109,8 +109,8 @@ def gen_summary(df, output_prefix=""):
     for span in [2,3,4,6,12]:
         thecube = df.cube("Churn", F.ceil(df.tenure / span).alias("%d_month_spans" % span), "gender", "Partner", "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10).alias("log_charges")).count()
         therollup = df.rollup("Churn", F.ceil(df.tenure / span).alias("%d_month_spans" % span), "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10).alias("log_charges")).agg({"TotalCharges" : "sum"}).alias("sum_charges")
-        thecube.write.parquet("%scube-%d.parquet" % (output_prefix, span))
-        therollup.write.parquet("%srollup-%d.parquet" % (output_prefix, span))
+        thecube.write.mode("overwrite").parquet("%scube-%d.parquet" % (output_prefix, span))
+        therollup.write.mode("overwrite").parquet("%srollup-%d.parquet" % (output_prefix, span))
 
     encoding_struct = {
         "categorical" : categoricals,
@@ -133,7 +133,7 @@ def losses_by_month(be):
 def output_reports(df, be=None, report_prefix=""):
     import json
 
-    summary = gen_summary(df)
+    summary = gen_summary(df, report_prefix)
 
     if be is not None:
         summary["losses_by_month"] = losses_by_month(be)
