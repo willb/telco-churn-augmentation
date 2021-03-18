@@ -16,11 +16,11 @@ def percent_true(df, cols):
 def cardinalities(df, cols):
     from functools import reduce
     
-    return df.groupBy(
-        F.lit(True).alias("drop_me")
-    ).agg(
-        F.struct(*[F.countDistinct(F.col(c)).alias(c) for c in cols]).alias("results")
-    ).drop("drop_me").select("results").collect()[0][0].asDict()
+    counts = df.agg(
+        F.struct(*[F.countDistinct(F.col(c)).alias(c) for c in cols] + [F.count(F.col(cols[0])).alias('total')]).alias("results")
+    ).select("results").collect()[0][0].asDict()
+    counts.update({'total' : df.count()})
+    return counts
 
 
 def likely_unique(counts):
