@@ -109,8 +109,8 @@ def gen_summary(df, output_prefix=""):
     categoricals = unique_values(df, likely_categoricals(counts))
 
     for span in [2,3,4,6,12]:
-        thecube = df.cube("Churn", F.ceil(df.tenure / span).alias("%d_month_spans" % span), "gender", "Partner", "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10)).count()
-        therollup = df.rollup("Churn", F.ceil(df.tenure / span).alias("%d_month_spans" % span), "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10)).agg({"TotalCharges" : "sum"})
+        thecube = df.cube("Churn", F.ceil(df.tenure / span).alias("%d_month_spans" % span), "gender", "Partner", "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10).alias("log_charges")).count()
+        therollup = df.rollup("Churn", F.ceil(df.tenure / span).alias("%d_month_spans" % span), "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10).alias("log_charges")).agg({"TotalCharges" : "sum"})
         thecube.write.parquet("%scube-%d.parquet" % (output_prefix, span))
         therollup.write.parquet("%srollup-%d.parquet" % (output_prefix, span))
 
