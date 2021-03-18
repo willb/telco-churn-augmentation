@@ -53,7 +53,7 @@ def unique_values_array(df, cols):
 
 
 def unique_values_driver(df, cols):
-    return { col : [v[0] for v in df.select(F.col(col).alias(value)).distinct().orderBy(F.col(value)).collect()] for col in cols}
+    return { col : [v[0] for v in df.select(F.col(col).alias('value')).distinct().orderBy(F.col('value')).collect()] for col in cols}
 
 def approx_ecdf(df, cols):
     from functools import reduce
