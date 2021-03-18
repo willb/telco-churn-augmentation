@@ -2,7 +2,7 @@
 # coding: utf-8
 
 import argparse
-from churn.etl import cast_wide_data
+from churn.etl import cast_and_coalesce_wide_data
 import os
 import sys
 import re
