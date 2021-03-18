@@ -112,12 +112,12 @@ if __name__ == '__main__':
 
     federation_time = timeit.timeit(lambda: write_df(wide_data, temp_output_file), number=1)
 
-    records = session.read.parquet(output_prefix + temp_output_file + "." + output_kind)
+    # prepare data for training by casting decimals to floats and coalescing
+    records = cast_and_coalesce_wide_data(session.read.parquet(output_prefix + temp_output_file + "." + output_kind))
     record_count = records.count()
     record_nonnull_count = records.dropna().count()
 
-    # prepare data for training by casting decimals to floats and coalescing
-    write_df(cast_and_coalesce_wide_data(records), output_file)
+    write_df(records, output_file)
 
     analysis_time = timeit.timeit(lambda: churn.eda.output_reports(records, billing_events, args.summary_prefix), number=1)
 
