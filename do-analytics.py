@@ -113,19 +113,18 @@ if __name__ == '__main__':
     federation_time = timeit.timeit(lambda: write_df(wide_data, temp_output_file), number=1)
 
     # prepare data for training by casting decimals to floats and coalescing
-    records = cast_and_coalesce_wide_data(session.read.parquet(output_prefix + temp_output_file + "." + output_kind))
+    coalesce_time = timeit.timeit(lambda: write_df(cast_and_coalesce_wide_data(session.read.parquet(output_prefix + temp_output_file + "." + output_kind)), output_file))
+    records = session.read.parquet(output_prefix + output_file + "." + output_kind)
     record_count = records.count()
     record_nonnull_count = records.dropna().count()
-
-    write_df(records, output_file)
-    records = session.read.parquet(output_prefix + output_file + "." + output_kind)
 
     analysis_time = timeit.timeit(lambda: churn.eda.output_reports(records, billing_events, args.summary_prefix), number=1)
 
     first_line = "Completed analytics pipeline (version %s)\n" % churn.etl.ETL_VERSION
 
-    first_line += 'Total time was %.02f to generate and process %d records\n' % (analysis_time + federation_time, record_count)
+    first_line += 'Total time was %.02f to generate and process %d records\n' % (analysis_time + federation_time + coalesce_time, record_count)
     first_line += 'Analytics and reporting took %.02f seconds\n' % analysis_time
+    first_line += 'Coalescing and casting data for reporting and ML took %.02f seconds\n' % coalesce_time
     first_line += 'Federation took %.02f seconds; configuration follows:\n\n' % federation_time
     print(first_line)
 
