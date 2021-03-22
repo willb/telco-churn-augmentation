@@ -10,7 +10,7 @@ from collections import defaultdict
 options = defaultdict(lambda: None)
 session = None
 
-ETL_VERSION = '0.2'
+ETL_VERSION = '0.7'
 
 def register_options(**kwargs):
     global options
@@ -46,6 +46,8 @@ def read_df(session, fn):
 
 def find_customers(billing_events_df):
     customers = billing_events_df.select("customerID").distinct()
+    if 'cache_customers' in options:
+        customers.cache()
     customers.createOrReplaceTempView("customers")
     return customers
 
@@ -56,7 +58,7 @@ def customers():
 def join_billing_data(billing_events_df):
     _register_session(billing_events_df.sql_ctx.sparkSession)
 
-    billing_events = billing_events_df.withColumn("value", billing_events_df.value.cast("float"))
+    billing_events = billing_events_df.withColumn("value", billing_events_df.value)
 
     customers = find_customers(billing_events)
 
@@ -78,12 +80,12 @@ def join_billing_data(billing_events_df):
     )
 
     customer_charges = customers.join(
-        counts_and_charges.where(F.col("kind") == "Charge"), "customerID"
+        counts_and_charges.where(F.col("kind") == "Charge"), "customerID", how="leftouter"
     ).select(
         "customerID",
         F.col("event_counts").alias("tenure"),
         F.col("total_charges").alias("TotalCharges"),
-    )
+    ).fillna({'tenure': 0, 'TotalCharges': 0.0})
 
     _register_views(locals(), "counts_and_charges", "terminations", "churned", "customer_charges")
  
@@ -252,13 +254,28 @@ def join_account_features(account_features_df):
     return customer_account_features
 
 
-def process_account_meta(account_meta_df):
+def process_account_meta(account_meta_df, usecal=None):
+    def is_senior_citizen(nowcol, dobcol):
+        if options['use_calendar_arithmetic']:
+            return F.when(
+                F.col("now") >= F.add_months(
+                    F.col("dateOfBirth"), 65 * 12
+                ), F.lit(True)
+            ).otherwise(F.lit(False))
+        else:
+            return (F.year(F.col(nowcol)) > (F.year(F.col(dobcol)) + 65)) | \
+                (F.year(F.col(nowcol)) == (F.year(F.col(dobcol)) + 65)) & \
+                (
+                    (F.month(F.col(nowcol)) < F.month(F.col(dobcol))) | \
+                    (
+                        (F.month(F.col(nowcol)) == F.month(F.col(dobcol))) & \
+                        (F.dayofmonth(F.col(nowcol)) <= F.dayofmonth(F.col(nowcol)))
+                    )
+                )
 
     customer_account_meta = account_meta_df.select(
         "customerID",
-        F.when(F.col("now") >= F.add_months(F.col("dateOfBirth"), 65 * 12), F.lit(True))
-        .otherwise(F.lit(False))
-        .alias("SeniorCitizen"),
+        is_senior_citizen("now", "dateOfBirth").alias("SeniorCitizen"),
         "Partner",
         "Dependents",
         "gender",
@@ -267,6 +284,10 @@ def process_account_meta(account_meta_df):
     
     _register_views(locals(), "customer_account_meta")
     return customer_account_meta
+
+def forcefloat(c):
+    return F.col(c).cast("float").alias(c)
+
 
 def join_wide_table(customer_billing, customer_phone_features, customer_internet_features, customer_account_features, customer_account_meta):
 
@@ -307,6 +328,34 @@ def join_wide_table(customer_billing, customer_phone_features, customer_internet
     return wide_data
 
     # In[ ]:
+
+def cast_and_coalesce_wide_data(wd):
+    if options["coalesce_output"] > 0:
+        wd = wd.coalesce(options["coalesce_output"])
+    
+    return wd.select(
+        "customerID",
+        "gender",
+        "SeniorCitizen",
+        "Partner",
+        "Dependents",
+        "tenure",
+        "PhoneService",
+        "MultipleLines",
+        "InternetService",
+        "OnlineSecurity",
+        "OnlineBackup",
+        "DeviceProtection",
+        "TechSupport",
+        "StreamingTV",
+        "StreamingMovies",
+        "Contract",
+        "PaperlessBilling",
+        "PaymentMethod",
+        forcefloat("MonthlyCharges"),
+        forcefloat("TotalCharges"),
+        "Churn",
+    )
 
 def write_df(df, name):
     output_kind = options["output_kind"]

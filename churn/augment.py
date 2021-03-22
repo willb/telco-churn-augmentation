@@ -2,7 +2,7 @@ import datetime
 import os
 
 import pyspark
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, DecimalType
 import pyspark.sql.functions as F
 from collections import defaultdict
 
@@ -10,6 +10,73 @@ options = defaultdict(lambda: None)
 
 now = datetime.datetime.now(datetime.timezone.utc)
 
+AUGMENT_VERSION = "0.7"
+AUGMENT_CUSTOMER_TAG = "0007"
+
+session = None
+currencyType = None
+
+def get_currency_type():
+    global options
+    global currencyType
+
+    if currencyType is not None:
+        return currencyType
+    
+    if "use_decimal" in options and options["use_decimal"]:
+        if "decimal_precision" in options :
+            assert options["decimal_precision"] > 5, "Decimal precision is too small; was %d but should be at least 6" % options["decimal_precision"]
+            currencyType = DecimalType(options["decimal_precision"], 2)
+        else:
+            # "999,999.99 should be enough for anyone"
+            currencyType = DecimalType(8, 2)
+    else:
+        currencyType = DoubleType()
+    
+    return currencyType
+
+def _register_session(s):
+    global session
+    session = s
+
+def _get_uniques(ct):
+    global session
+    table_names = set([table.name for table in session.catalog.listTables()])
+
+    if ("uniques_%d" % ct) in table_names:
+        return session.table("uniques_%d" % ct)
+    else:
+        def str_part(seed=0x5CA1AB1E):
+            "generate the string part of a unique ID"
+            import random
+
+            r = random.Random(seed)
+            from base64 import b64encode
+
+            while True:
+                yield "%s-%s" % (b64encode(r.getrandbits(72).to_bytes(9, "big"), b"@_").decode(
+                    "utf-8"
+                ), AUGMENT_CUSTOMER_TAG)
+        
+        sp = str_part()
+        
+        uniques = (
+            session.createDataFrame(
+                schema=StructType([StructField("u_value", StringType())]),
+                data=[dict(u_value=next(sp)) for _ in range(min(int(ct * 1.02), ct + 2))],
+            )
+            .distinct()
+            .orderBy("u_value")
+            .limit(ct)
+        ).cache()
+
+        uc = uniques.count()
+        assert (uc == ct), "due to prng collision we had %d instead of %d replicas" % (uc, ct)
+
+        uniques.createOrReplaceTempView("uniques_%d" % ct)
+
+        return uniques
+        
 
 def register_options(**kwargs):
     global options
@@ -17,6 +84,8 @@ def register_options(**kwargs):
         options[k] = v
 
 def load_supplied_data(session, input_file):
+    _register_session(session)
+
     fields = [
         "customerID",
         "gender",
@@ -53,42 +122,21 @@ def load_supplied_data(session, input_file):
 
     df = session.read.csv(input_file, header=True, schema=schema)
     
+    source_count = df.count()
     df = df.dropna()
+    nn_count = df.count()
+
+    if source_count == nn_count:    
+        print("read %d records from source dataset with no nulls -- is this what you expect?" % source_count)
+    else:
+        print("read %d records from source dataset (%d non-null records)" % (source_count, nn_count))
     
     return df
 
 def replicate_df(df, duplicates):
-    def str_part(seed=0x5CA1AB1E):
-        "generate the string part of a unique ID"
-        import random
-
-        r = random.Random(seed)
-        from base64 import b64encode
-
-        while True:
-            yield "%s" % b64encode(r.getrandbits(48).to_bytes(6, "big"), b"@_").decode(
-                "utf-8"
-            )
 
     if duplicates > 1:
-        sp = str_part()
-        session = df.sql_ctx.sparkSession
-
-        uniques = (
-            session.createDataFrame(
-                schema=StructType([StructField("u_value", StringType())]),
-                data=[dict(u_value=next(sp)) for _ in range(duplicates * 2)],
-            )
-            .distinct()
-            .limit(duplicates)
-        )
-
-        uc = uniques.count()
-        if uc != duplicates:
-            print(
-                "warning:  got some rng collision and have %d instead of %d duplicates"
-                % (uc, duplicates)
-            )
+        uniques = _get_uniques(duplicates)
 
         df = (
             df.crossJoin(uniques.distinct())
@@ -127,6 +175,17 @@ def examine_categoricals(df, columns=None):
 def billing_events(df):
     import datetime
 
+    MAX_MONTH = 72
+
+    def get_last_month(col):
+        h = F.abs(F.xxhash64(col))
+        h1 = (h.bitwiseAND(0xff)) % (MAX_MONTH // 2)
+        h2 = (F.shiftRight(h, 8).bitwiseAND(0xff)) % (MAX_MONTH // 3)
+        h3 = (F.shiftRight(h, 16).bitwiseAND(0xff)) % (MAX_MONTH // 5)
+        h4 = (F.shiftRight(h, 24).bitwiseAND(0xff)) % (MAX_MONTH // 7)
+        h5 = (F.shiftRight(h, 32).bitwiseAND(0xff)) % (MAX_MONTH // 11)
+        return -(h1 + h2 + h3 + h4 + h5)
+
     w = pyspark.sql.Window.orderBy(F.lit("")).partitionBy(df.customerID)
 
     charges = (
@@ -134,36 +193,49 @@ def billing_events(df):
             df.customerID,
             F.lit("Charge").alias("kind"),
             F.explode(
-                F.array_repeat(df.TotalCharges / df.tenure, df.tenure.cast("int"))
+                F.array_repeat((df.TotalCharges / df.tenure).cast(get_currency_type()), df.tenure.cast("int"))
             ).alias("value"),
+            F.when(df.Churn == "Yes", get_last_month(df.customerID)).otherwise(0).alias("last_month")
         )
-        .withColumn("now", F.lit(now))
-        .withColumn("month_number", -F.row_number().over(w))
+        .withColumn("now", F.lit(now).cast("date"))
+        .withColumn("month_number", -(F.row_number().over(w) + F.col("last_month")))
         .withColumn("date", F.expr("add_months(now, month_number)"))
-        .drop("now", "month_number")
+        .drop("now", "month_number", "last_month")
     )
 
     serviceStarts = (
-        df.select(
+        df.withColumn("last_month", F.when(df.Churn == "Yes", get_last_month(df.customerID)).otherwise(0)).select(
             df.customerID,
             F.lit("AccountCreation").alias("kind"),
-            F.lit(0.0).alias("value"),
+            F.lit(0.0).cast(get_currency_type()).alias("value"),
             F.lit(now).alias("now"),
-            (-df.tenure - 1).alias("month_number"),
+            (-df.tenure - 1 + F.col("last_month")).alias("month_number"),
         )
         .withColumn("date", F.expr("add_months(now, month_number)"))
         .drop("now", "month_number")
     )
 
-    serviceTerminations = df.where(df.Churn == "Yes").select(
+    serviceTerminations = df.withColumn("last_month", F.when(df.Churn == "Yes", get_last_month(df.customerID)).otherwise(0)).where(
+        df.Churn == "Yes"
+    ).withColumn("now", F.lit(now)).select(
         df.customerID,
         F.lit("AccountTermination").alias("kind"),
-        F.lit(0.0).alias("value"),
-        F.add_months(F.lit(now), 0).alias("date"),
+        F.lit(0.0).cast(get_currency_type()).alias("value"),
+        F.expr("add_months(now, last_month)").alias("date")
     )
 
     billingEvents = charges.union(serviceStarts).union(serviceTerminations).orderBy("date").withColumn("month", F.substring("date", 0, 7))
     return billingEvents
+
+def resolve_path(name):
+    output_prefix = options["output_prefix"] or ""
+    output_mode = options["output_mode"] or "overwrite"
+    output_kind = options["output_kind"] or "parquet"
+    name = "%s.%s" % (name, output_kind)
+    if output_prefix != "":
+        name = "%s%s" % (output_prefix, name)
+    
+    return name
 
 def write_df(df, name, skip_replication=False, partition_by=None):
     dup_times = options["dup_times"] or 1
@@ -202,7 +274,7 @@ def customer_meta(df):
         "gender",
         "Partner",
         "Dependents",
-        "MonthlyCharges",
+        F.col("MonthlyCharges").cast(get_currency_type()).alias("MonthlyCharges"),
     )
 
     customerMetaRaw = customerMetaRaw.withColumn(
