@@ -180,11 +180,11 @@ def billing_events(df):
     def get_last_month(col):
         h = F.abs(F.xxhash64(col))
         h1 = (h.bitwiseAND(0xff)) % (MAX_MONTH // 2)
-        h2 = (F.shiftRight(h, 8).bitwiseAND(0xff)) % (MAX_MONTH // 3)
-        h3 = (F.shiftRight(h, 16).bitwiseAND(0xff)) % (MAX_MONTH // 5)
-        h4 = (F.shiftRight(h, 24).bitwiseAND(0xff)) % (MAX_MONTH // 7)
-        h5 = (F.shiftRight(h, 32).bitwiseAND(0xff)) % (MAX_MONTH // 11)
-        return -(h1 + h2 + h3 + h4 + h5)
+        h2 = F.abs((F.shiftRightUnsigned(h, 8).bitwiseAND(0xff)) % (MAX_MONTH // 3))
+        h3 = F.abs((F.shiftRightUnsigned(h, 16).bitwiseAND(0xff)) % (MAX_MONTH // 5))
+        h4 = F.abs((F.shiftRightUnsigned(h, 24).bitwiseAND(0xff)) % (MAX_MONTH // 7))
+        h5 = F.abs((F.shiftRightUnsigned(h, 32).bitwiseAND(0xff)) % (MAX_MONTH // 11))
+        return -F.array_max(F.array(F.lit(0), (h1 + h2 + h3 + h4 + h5)))
 
     w = pyspark.sql.Window.orderBy(F.lit("")).partitionBy(df.customerID)
 
@@ -198,7 +198,7 @@ def billing_events(df):
             F.when(df.Churn == "Yes", get_last_month(df.customerID)).otherwise(0).alias("last_month")
         )
         .withColumn("now", F.lit(now).cast("date"))
-        .withColumn("month_number", -(F.row_number().over(w) + F.col("last_month")))
+        .withColumn("month_number", (F.col("last_month")) - F.row_number().over(w))
         .withColumn("date", F.expr("add_months(now, month_number)"))
         .drop("now", "month_number", "last_month")
     )
@@ -209,7 +209,7 @@ def billing_events(df):
             F.lit("AccountCreation").alias("kind"),
             F.lit(0.0).cast(get_currency_type()).alias("value"),
             F.lit(now).alias("now"),
-            (-df.tenure - 1 + F.col("last_month")).alias("month_number"),
+            (-(df.tenure - 1 - F.col("last_month"))).alias("month_number"),
         )
         .withColumn("date", F.expr("add_months(now, month_number)"))
         .drop("now", "month_number")
