@@ -66,13 +66,16 @@ def approx_ecdf(df, cols):
     return {c: dict(zip(quantiles, vs)) for (c, vs) in result.items()}
 
 
-def gen_summary(df, output_prefix=""):
+def gen_summary(df, output_prefix="", spans=None):
     summary = {}
     
     string_cols = []
     boolean_cols = []
     numeric_cols = []
     other_cols = []
+
+    if spans is None:
+        spans = [2,3,4,6,12]
 
     for field in df.schema.fields:
         if isinstance(field.dataType, T.StringType):
@@ -88,11 +91,13 @@ def gen_summary(df, output_prefix=""):
     uniques = likely_unique(counts)
     categoricals = unique_values(df, likely_categoricals(counts))
 
-    for span in [2,3,4,6,12]:
+    for span in spans:
         thecube = df.cube("Churn", F.ceil(df.tenure / span).alias("%d_month_spans" % span), "gender", "Partner", "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10).alias("log_charges")).count()
         therollup = df.rollup("Churn", F.ceil(df.tenure / span).alias("%d_month_spans" % span), "SeniorCitizen", "Contract", "PaperlessBilling", "PaymentMethod", F.ceil(F.log2(F.col("MonthlyCharges"))*10).alias("log_charges")).agg(F.sum(F.col("TotalCharges")).alias("sum_charges"))
         thecube.write.mode("overwrite").parquet("%scube-%d.parquet" % (output_prefix, span))
         therollup.write.mode("overwrite").parquet("%srollup-%d.parquet" % (output_prefix, span))
+        thecube.createOrReplaceTempView("cube_%d" % span)
+        therollup.createOrReplaceTempView("rollup_%d" % span)
 
     encoding_struct = {
         "categorical" : categoricals,
